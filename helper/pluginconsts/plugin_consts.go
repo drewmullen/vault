@@ -59,8 +59,10 @@ const (
 	SecretEngineIdentity      = "identity"
 	SecretEngineAgentRegistry = "agent_registry"
 	SecretEngineSystem        = "system"
-	// SecretEngineGeneric is a very old and deprecated version of KV, but is left
-	// for completeness.
+	// Deprecated: SecretEngineGeneric is a legacy alias for KV. Mount table
+	// entries are now automatically converted from "generic" to "kv" on upgrade.
+	// This constant is retained only for backward compatibility during the
+	// transition window and will be removed in a future major release.
 	SecretEngineGeneric = "generic"
 	// SecretEngineDatabase is the entry type for all databases, i.e. this is the combined
 	// database type for every database.

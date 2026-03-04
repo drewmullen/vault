@@ -48,7 +48,7 @@ func TestCoreMetrics_KvSecretGauge(t *testing.T) {
 		{"secret3/", "kv", "2", 4},
 		{"prefix/secret3/", "kv", "2", 0},
 		{"prefix/secret4/", "kv", "2", 5},
-		{"generic/", "generic", "1", 3},
+		{"generic/", "kv", "1", 3},
 	}
 	ctx := namespace.RootContext(nil)
 
