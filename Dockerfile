@@ -37,9 +37,14 @@ ENV NAME=$NAME
 # Create a non-root user to run the software.
 RUN addgroup ${NAME} && adduser -S -G ${NAME} ${NAME}
 
-RUN apk add --no-cache libcap su-exec dumb-init tzdata
+# NOTE: zlib is only here to resolve ALPINE-CVE-2026-27171, it can be removed
+# when when our Alpine release is >= 3.23.4
+RUN apk update && apk add --upgrade --no-cache libcap su-exec dumb-init tzdata zlib
 
-COPY dist/$TARGETOS/$TARGETARCH/$BIN_NAME /bin/
+COPY dist/$TARGETOS/$TARGETARCH/$BIN_NAME /bin/${BIN_NAME}
+
+# Set IPC_LOCK at build time because the container runs as an unprivileged user
+RUN setcap cap_ipc_lock=+ep /bin/${BIN_NAME}
 
 # /vault/logs is made available to use as a location to store audit logs, if
 # desired; /vault/file is made available to use as a location with the file
@@ -71,6 +76,8 @@ EXPOSE 8200
 COPY .release/docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENTRYPOINT ["docker-entrypoint.sh"]
 
+# Use the Vault user as the default user for starting this container.
+USER ${NAME}
 
 # # By default you'll get a single-node development server that stores everything
 # # in RAM and bootstraps itself. Don't use this configuration for production.
@@ -127,7 +134,10 @@ RUN groupadd --gid 1000 vault && \
 
 # Copy in the new Vault from CRT pipeline, rather than fetching it from our
 # public releases.
-COPY dist/$TARGETOS/$TARGETARCH/$BIN_NAME /bin/
+COPY dist/$TARGETOS/$TARGETARCH/$BIN_NAME /bin/${BIN_NAME}
+
+# Set IPC_LOCK at build time because the container runs as an unprivileged user
+RUN setcap cap_ipc_lock=+ep /bin/${BIN_NAME}
 
 # /vault/logs is made available to use as a location to store audit logs, if
 # desired; /vault/file is made available to use as a location with the file
@@ -164,7 +174,7 @@ COPY .release/docker/ubi-docker-entrypoint.sh /usr/local/bin/docker-entrypoint.s
 ENTRYPOINT ["docker-entrypoint.sh"]
 
 # Use the Vault user as the default user for starting this container.
-USER vault
+USER ${NAME}
 
 # # By default you'll get a single-node development server that stores everything
 # # in RAM and bootstraps itself. Don't use this configuration for production.

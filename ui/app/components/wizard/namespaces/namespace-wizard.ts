@@ -9,6 +9,7 @@ import { tracked } from '@glimmer/tracking';
 import Component from '@glimmer/component';
 import { SecurityPolicy } from 'vault/components/wizard/namespaces/step-1';
 import { CreationMethod } from 'vault/components/wizard/namespaces/step-3';
+import { WIZARD_ID_MAP } from 'vault/utils/constants/wizard';
 
 import type ApiService from 'vault/services/api';
 import type Block from 'vault/components/wizard/namespaces/step-2';
@@ -26,6 +27,7 @@ const DEFAULT_STEPS = [
 interface Args {
   isIntroModal: boolean;
   onRefresh: CallableFunction;
+  onFlexiblePolicyComplete: CallableFunction;
 }
 
 interface WizardState {
@@ -35,8 +37,6 @@ interface WizardState {
   creationMethod: CreationMethod | null;
   codeSnippet: string | null;
 }
-
-export const WIZARD_ID = 'namespace';
 
 export default class WizardNamespacesWizardComponent extends Component<Args> {
   @service declare readonly api: ApiService;
@@ -58,7 +58,7 @@ export default class WizardNamespacesWizardComponent extends Component<Args> {
   methods = CreationMethod;
   policy = SecurityPolicy;
 
-  wizardId = WIZARD_ID;
+  wizardId = WIZARD_ID_MAP.namespace;
 
   // Whether the current step requirements have been met to proceed to the next step
   get canProceed() {
@@ -117,6 +117,19 @@ export default class WizardNamespacesWizardComponent extends Component<Args> {
   }
 
   @action
+  async onDone() {
+    await this.onDismiss();
+    this.args.onFlexiblePolicyComplete();
+    this.flashMessages.success(`Your current setup is 1 namespace.`, { title: 'Guided start complete' });
+  }
+
+  @action
+  async onDismiss() {
+    this.wizard.dismiss(this.wizardId);
+    await this.args.onRefresh();
+  }
+
+  @action
   async onSubmit() {
     switch (this.wizardState.creationMethod) {
       case CreationMethod.UI:
@@ -127,12 +140,6 @@ export default class WizardNamespacesWizardComponent extends Component<Args> {
         // In these cases, there is no submit button
         break;
     }
-  }
-
-  @action
-  async onDismiss() {
-    this.wizard.dismiss(this.wizardId);
-    await this.args.onRefresh();
   }
 
   @action
@@ -155,7 +162,7 @@ export default class WizardNamespacesWizardComponent extends Component<Args> {
         await this.createNamespace(namespaceName, fullPath);
       }
 
-      this.flashMessages.success(`The namespaces have been successfully created.`);
+      this.flashMessages.success('Your new configuration has been applied.', { title: 'Namespaces created' });
     } catch (error) {
       const { message } = await this.api.parseError(error);
       this.flashMessages.danger(`Error creating namespaces: ${message}`);

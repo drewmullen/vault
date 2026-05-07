@@ -51,6 +51,9 @@ func (i *IdentityStore) GetDisableLowerCasedNames() bool {
 	return i.disableLowerCasedNames
 }
 
+// resetDB callers must hold the write lock on i.lock before calling, to ensure
+// that no other goroutine is reading from or writing to the database while it
+// gets reset.
 func (i *IdentityStore) resetDB() error {
 	var err error
 
@@ -64,22 +67,24 @@ func (i *IdentityStore) resetDB() error {
 
 func NewIdentityStore(ctx context.Context, core *Core, config *logical.BackendConfig, logger log.Logger) (*IdentityStore, error) {
 	iStore := &IdentityStore{
-		view:                   config.StorageView,
-		logger:                 logger,
-		router:                 core.router,
-		redirectAddr:           core.redirectAddr,
-		localNode:              core,
-		namespacer:             core,
-		metrics:                core.MetricSink(),
-		totpPersister:          core,
-		groupUpdater:           core,
-		tokenStorer:            core,
-		entityCreator:          core,
-		mountLister:            core,
-		mfaBackend:             core.loginMFABackend,
-		aliasLocks:             locksutil.CreateLocks(),
-		renameDuplicates:       core.FeatureActivationFlags,
-		activationErrorHandler: core,
+		view:                            config.StorageView,
+		logger:                          logger,
+		router:                          core.router,
+		redirectAddr:                    core.redirectAddr,
+		localNode:                       core,
+		namespacer:                      core,
+		metrics:                         core.MetricSink(),
+		totpPersister:                   core,
+		groupUpdater:                    core,
+		tokenStorer:                     core,
+		entityCreator:                   core,
+		mountLister:                     core,
+		syntheticAliasAccessorValidator: core,
+		billingCounter:                  core,
+		mfaBackend:                      core.loginMFABackend,
+		aliasLocks:                      locksutil.CreateLocks(),
+		activationManager:               core.FeatureActivationFlags,
+		activationErrorHandler:          core,
 	}
 
 	// Create a memdb instance, which by default, operates on lower cased
@@ -128,6 +133,11 @@ func NewIdentityStore(ctx context.Context, core *Core, config *logical.BackendCo
 		InitializeFunc: iStore.initialize,
 		ActivationFunc: iStore.activate,
 		PathsSpecial: &logical.Paths{
+			// Root paths require the token have sudo capability.
+			Root: []string{
+				// Entity merge is destructive and can operate on every entity, so requires a higher privilege as a result
+				"entity/merge*",
+			},
 			Unauthenticated: unauthenticatedPaths,
 			LocalStorage: []string{
 				localAliasesBucketsPrefix,
@@ -1296,6 +1306,51 @@ func (i *IdentityStore) entityByAliasFactorsInTxn(txn *memdb.Txn, mountAccessor,
 	return i.MemDBEntityByAliasIDInTxn(txn, alias.ID, clone)
 }
 
+// entityByAliasFactorsIf fetches and clones an entity by alias factors only when
+// shouldReturn evaluates to true for the matching alias.
+func (i *IdentityStore) entityByAliasFactorsIf(mountAccessor, aliasName string, shouldReturn func(*identity.Alias) bool) (*identity.Entity, error) {
+	if mountAccessor == "" {
+		return nil, fmt.Errorf("missing mount accessor")
+	}
+
+	if aliasName == "" {
+		return nil, fmt.Errorf("missing alias name")
+	}
+
+	txn := i.db.Txn(false)
+
+	return i.entityByAliasFactorsInTxnIf(txn, mountAccessor, aliasName, shouldReturn)
+}
+
+// entityByAliasFactorsInTxnIf fetches and clones an entity by alias factors only
+// when shouldReturn evaluates to true for the matching alias.
+func (i *IdentityStore) entityByAliasFactorsInTxnIf(txn *memdb.Txn, mountAccessor, aliasName string, shouldReturn func(*identity.Alias) bool) (*identity.Entity, error) {
+	var entity *identity.Entity
+
+	if txn == nil {
+		return nil, fmt.Errorf("nil txn")
+	}
+
+	if mountAccessor == "" {
+		return nil, fmt.Errorf("missing mount accessor")
+	}
+
+	if aliasName == "" {
+		return nil, fmt.Errorf("missing alias name")
+	}
+
+	alias, err := i.MemDBAliasByFactorsInTxn(txn, mountAccessor, aliasName, false, false)
+	if err != nil {
+		return nil, err
+	}
+
+	if alias == nil {
+		return entity, nil
+	}
+
+	return i.MemDBEntityByAliasIDInTxnClonePredicate(txn, alias.ID, shouldReturn)
+}
+
 // CreateEntity creates a new entity.
 func (i *IdentityStore) CreateEntity(ctx context.Context) (*identity.Entity, error) {
 	defer metrics.MeasureSince([]string{"identity", "create_entity"}, time.Now())
@@ -1354,21 +1409,15 @@ func (i *IdentityStore) CreateOrFetchEntity(ctx context.Context, alias *logical.
 		return nil, false, fmt.Errorf("mount accessor %q is not a mount of type %q", alias.MountAccessor, alias.MountType)
 	}
 
-	// Check if an entity already exists for the given alias.
-	// We don't clone here to avoid unnecessary allocations - if we need to
-	// return early, we'll clone at that point.
-	entity, err = i.entityByAliasFactors(alias.MountAccessor, alias.Name, false)
+	// Fast path: only clone and return the entity when alias metadata is unchanged.
+	entity, err = i.entityByAliasFactorsIf(alias.MountAccessor, alias.Name, func(existingAlias *identity.Alias) bool {
+		return strutil.EqualStringMaps(existingAlias.Metadata, alias.Metadata)
+	})
 	if err != nil {
 		return nil, false, err
 	}
-	if entity != nil && changedAliasIndex(entity, alias) == -1 {
-		// Entity exists and no metadata changes - clone before returning
-		// to avoid exposing internal MemDB state to callers.
-		clonedEntity, err := entity.Clone()
-		if err != nil {
-			return nil, false, err
-		}
-		return clonedEntity, false, nil
+	if entity != nil {
+		return entity, false, nil
 	}
 
 	i.lock.Lock()
