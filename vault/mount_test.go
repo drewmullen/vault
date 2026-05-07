@@ -226,8 +226,8 @@ func TestCore_Mount_secrets_builtin_RunningVersion(t *testing.T) {
 	}
 }
 
-// TestCore_Mount_kv_generic tests that we can successfully mount kv using the
-// kv alias "generic"
+// TestCore_Mount_kv_generic tests that mounting with the deprecated "generic"
+// alias succeeds and that the persisted type is canonicalized to "kv".
 func TestCore_Mount_kv_generic(t *testing.T) {
 	c, keys, _ := TestCoreUnsealed(t)
 	me := &MountEntry{
@@ -243,6 +243,11 @@ func TestCore_Mount_kv_generic(t *testing.T) {
 	match := c.router.MatchingMount(namespace.RootContext(nil), "foo/bar")
 	if match != "foo/" {
 		t.Fatalf("missing mount")
+	}
+
+	// The mount entry type should have been canonicalized to "kv".
+	if me.Type != mountTypeKV {
+		t.Fatalf("expected mount type %q, got %q", mountTypeKV, me.Type)
 	}
 
 	inmemSink := metrics.NewInmemSink(1000000*time.Hour, 2000000*time.Hour)
@@ -939,6 +944,84 @@ func verifyDefaultTable(t *testing.T, table *MountTable, expected int, mountsLoc
 			t.Fatalf("bad: %v", entry)
 		}
 	}
+}
+
+// TestRunMountUpdates_GenericToKV verifies that runMountUpdates rewrites
+// legacy "generic" mount entries to "kv" and persists the change.
+func TestRunMountUpdates_GenericToKV(t *testing.T) {
+	c, _, _ := TestCoreUnsealed(t)
+
+	// Inject a mount table that contains a "generic" entry, simulating a
+	// pre-upgrade Vault that persisted this legacy type.
+	c.mounts = &MountTable{
+		Type: mountTableType,
+		Entries: []*MountEntry{
+			{
+				Table:            mountTableType,
+				Path:             "legacy/",
+				Type:             "generic",
+				UUID:             "abcd",
+				Accessor:         "kv-abcd",
+				BackendAwareUUID: "abcde",
+				NamespaceID:      namespace.RootNamespaceID,
+				namespace:        namespace.RootNamespace,
+			},
+		},
+	}
+
+	err := c.runMountUpdates(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// After runMountUpdates, the entry should be rewritten to "kv".
+	for _, entry := range c.mounts.Entries {
+		if entry.Path == "legacy/" {
+			if entry.Type != mountTypeKV {
+				t.Fatalf("expected type %q after conversion, got %q", mountTypeKV, entry.Type)
+			}
+			return
+		}
+	}
+	t.Fatal("legacy/ mount entry not found in table")
+}
+
+// TestRunMountUpdates_GenericToKV_Idempotent verifies that running
+// runMountUpdates a second time on an already-converted table is a no-op.
+func TestRunMountUpdates_GenericToKV_Idempotent(t *testing.T) {
+	c, _, _ := TestCoreUnsealed(t)
+
+	c.mounts = &MountTable{
+		Type: mountTableType,
+		Entries: []*MountEntry{
+			{
+				Table:            mountTableType,
+				Path:             "already-kv/",
+				Type:             mountTypeKV,
+				UUID:             "abcd",
+				Accessor:         "kv-abcd",
+				BackendAwareUUID: "abcde",
+				NamespaceID:      namespace.RootNamespaceID,
+				namespace:        namespace.RootNamespace,
+			},
+		},
+	}
+
+	// Should succeed without persisting (no changes needed).
+	err := c.runMountUpdates(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, entry := range c.mounts.Entries {
+		if entry.Path == "already-kv/" {
+			if entry.Type != mountTypeKV {
+				t.Fatalf("expected type %q, got %q", mountTypeKV, entry.Type)
+			}
+			return
+		}
+	}
+	t.Fatal("already-kv/ mount entry not found in table")
 }
 
 func TestSingletonMountTableFunc(t *testing.T) {

@@ -445,7 +445,7 @@ func (c *Core) findOfficialKvMounts(ctx context.Context, includeLocal, includeRe
 			continue
 		}
 
-		if entry.Type == pluginconsts.SecretEngineKV || entry.Type == pluginconsts.SecretEngineGeneric {
+		if entry.Type == pluginconsts.SecretEngineKV {
 			version, ok := entry.Options["version"]
 			if !ok || version == "" {
 				version = "1"
@@ -506,7 +506,7 @@ func (c *Core) findKvMounts(includeLocal, includeReplicated bool, kvVersion stri
 			continue
 		}
 
-		if entry.Type == pluginconsts.SecretEngineKV || entry.Type == pluginconsts.SecretEngineGeneric {
+		if entry.Type == pluginconsts.SecretEngineKV {
 			version, ok := entry.Options["version"]
 			if !ok || version == "" {
 				version = "1"

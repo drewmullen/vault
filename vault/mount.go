@@ -640,6 +640,12 @@ func (c *Core) mountInternalWithRequest(ctx context.Context, entry *MountEntry, 
 	entry.NamespaceID = ns.ID
 	entry.namespace = ns
 
+	// Canonicalize any aliased mount types (e.g. "generic" → "kv") so that
+	// the persisted mount table always contains the canonical type.
+	if alias, ok := mountAliases[entry.Type]; ok {
+		entry.Type = alias
+	}
+
 	// Ensure the cache is populated, don't need the result
 	NamespaceByID(ctx, ns.ID, c)
 
@@ -1437,6 +1443,15 @@ func (c *Core) runMountUpdates(ctx context.Context, needPersist bool) error {
 
 	// Upgrade to table-scoped entries
 	for _, entry := range c.mounts.Entries {
+		// Canonicalize legacy "generic" mount type to "kv".
+		// Both types use the same backend (kv.Factory); this normalizes
+		// the persisted mount table so dual-type checks are no longer needed.
+		if entry.Type == "generic" {
+			c.logger.Info("converting legacy generic mount to kv", "path", entry.Path)
+			entry.Type = mountTypeKV
+			needPersist = true
+		}
+
 		if !c.PR1103disabled && entry.Type == mountTypeNSCubbyhole && !entry.Local && !c.ReplicationState().HasState(consts.ReplicationPerformanceSecondary|consts.ReplicationDRSecondary) {
 			entry.Local = true
 			needPersist = true

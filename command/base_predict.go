@@ -91,7 +91,7 @@ func (b *BaseCommand) PredictVaultAvailableMounts() complete.Predictor {
 		"aws",
 		"consul",
 		"database",
-		"generic",
+		"kv",
 		"pki",
 		"plugin",
 		"rabbitmq",

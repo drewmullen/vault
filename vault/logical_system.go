@@ -2073,6 +2073,9 @@ func (b *SystemBackend) handleMount(ctx context.Context, req *logical.Request, d
 
 	switch logicalType {
 	case "kv":
+	case "generic":
+		// Normalize the deprecated "generic" alias to "kv".
+		logicalType = "kv"
 	case "kv-v1":
 		// Alias KV v1
 		logicalType = "kv"
